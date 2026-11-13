@@ -1,4 +1,4 @@
-name: rebrand
+name: extrair-motor
 on: [workflow_dispatch, push]
 jobs:
   build:
@@ -6,44 +6,33 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       
-      - name: Setup Theos
-        uses: Randomblock1/theos-action@v1
-        with:
-          theos-path: $HOME/theos
+      - name: Preparar Ambiente
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y binutils radare2 zip unzip
 
-      - name: Prepare IPA and Dump
+      - name: Extrair e Analisar Binário
         run: |
           mkdir -p work
           cd work
-          
-          # Acha o arquivo .ipa não importa onde ele esteja
           IPA_FILE=$(find .. -maxdepth 2 -name "*.ipa" | head -n 1)
-          if [ -z "$IPA_FILE" ]; then
-            echo "Erro: Nenhuma IPA encontrada no repositório!"
-            exit 1
-          fi
-          
           unzip -q "$IPA_FILE" -d ext
-          APP=$(find ext/Payload -maxdepth 1 -name '*.app' | head -1)
           
-          # Extrai o nome do executável
-          BIN=$(python3 -c "import plistlib; print(plistlib.load(open('$APP/Info.plist','rb'))['CFBundleExecutable'])")
+          BIN=$(find ext/Payload -maxdepth 2 -name "3105" | head -n 1)
           
-          # Extrai strings para podermos mapear as telas
-          strings -a "$APP/$BIN" > strings.txt
+          # 1. nm: Lista todos os símbolos (funções) do app
+          nm -gU "$BIN" > nm_symbols.txt 2>/dev/null || true
           
-          echo "APP=$APP" >> $GITHUB_ENV
-          echo "BIN=$BIN" >> $GITHUB_ENV
-
-      - name: Build Tweak
-        run: |
-          cd tweak
-          make clean package FINALPACKAGE=1
+          # 2. rabin2: Lista as classes Objective-C (se houver)
+          rabin2 -C "$BIN" > objc_classes.txt 2>/dev/null || true
+          
+          # 3. Extrai strings que parecem nomes de classes Swift
+          strings -a "$BIN" | grep -E "_TtC|_TtV" > swift_classes.txt
 
       - uses: actions/upload-artifact@v4
         with:
           name: out
           path: |
-            tweak/.theos/obj/arm64/*.dylib
-            tweak/packages/*.deb
-            work/strings.txt
+            work/nm_symbols.txt
+            work/objc_classes.txt
+            work/swift_classes.txt
