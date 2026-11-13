@@ -1,0 +1,8 @@
+Package: com.voce.rebrand3105
+Name: Rebrand3105
+Version: 0.0.1
+Architecture: iphoneos-arm
+Description: rebrand
+Maintainer: voce
+Author: voce
+Section: Tweaks
