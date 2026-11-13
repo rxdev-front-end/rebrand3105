@@ -2,28 +2,54 @@ name: rebrand
 on: [workflow_dispatch, push]
 jobs:
   build:
-    runs-on: macos-13
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - run: |
-          brew install ldid xz
-          git clone --recursive https://github.com/theos/theos.git $HOME/theos
-          echo "THEOS=$HOME/theos" >> $GITHUB_ENV
-          echo "$HOME/theos/bin" >> $GITHUB_PATH
-      - run: |
+      
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y git make clang perl zip unzip libssl-dev libplist-dev libxml2-dev
+          
+      - name: Setup Theos
+        run: |
+          export THEOS=$HOME/theos
+          git clone --recursive https://github.com/theos/theos.git $THEOS
+          sudo mkdir -p /opt/theos
+          sudo chown -R $USER /opt/theos
+          
+          # Baixando o SDK e o toolchain do iOS
+          git clone --depth 1 https://github.com/theos/sdks.git $THEOS/sdks
+          curl -LO https://github.com/theos/toolchain/releases/latest/download/ios-toolchain.tar.xz
+          tar -xf ios-toolchain.tar.xz -C $THEOS
+          
+          echo "THEOS=$THEOS" >> $GITHUB_ENV
+          echo "$THEOS/bin" >> $GITHUB_PATH
+
+      - name: Prepare IPA and Dump
+        run: |
           mkdir -p work && cd work
           unzip -q ../ipa/3105.ipa -d ext
           APP=$(find ext/Payload -maxdepth 1 -name '*.app' | head -1)
-          BIN=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$APP/Info.plist")
+          BIN=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$APP/Info.plist" 2>/dev/null || python3 -c "import plistlib; print(plistlib.load(open('$APP/Info.plist','rb'))['CFBundleExecutable'])")
           echo "APP=$APP" >> $GITHUB_ENV
           echo "BIN=$BIN" >> $GITHUB_ENV
-          otool -ov "$APP/$BIN" > classes.txt 2>/dev/null || true
+          
+          # Dump de classes e strings
           strings -a "$APP/$BIN" > strings.txt
-      - run: cd tweak && make clean package FINALPACKAGE=1
+          # No Linux usamos objdump
+          objdump -x "$APP/$BIN" > classes.txt 2>/dev/null || true
+
+      - name: Build Tweak
+        run: |
+          cd tweak
+          make clean package FINALPACKAGE=1
+
       - uses: actions/upload-artifact@v4
         with:
           name: out
           path: |
             tweak/.theos/obj/arm64/*.dylib
+            tweak/packages/*.deb
             work/classes.txt
             work/strings.txt
