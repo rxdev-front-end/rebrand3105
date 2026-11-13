@@ -6,19 +6,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       
-      - name: Install dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y git make clang perl zip unzip libssl-dev libplist-dev libxml2-dev python3 wget curl
-          
       - name: Setup Theos
-        run: |
-          export THEOS=$HOME/theos
-          # Instalador oficial do Theos aceitando todas as configurações padrão
-          yes "" | bash -c "$(curl -fsSL https://raw.githubusercontent.com/theos/theos/master/bin/install-theos)"
-          
-          echo "THEOS=$THEOS" >> $GITHUB_ENV
-          echo "$THEOS/bin" >> $GITHUB_PATH
+        uses: Randomblock1/theos-action@v1
+        with:
+          theos-path: $HOME/theos
 
       - name: Prepare IPA and Dump
         run: |
@@ -26,15 +17,14 @@ jobs:
           unzip -q ../ipa/3105.ipa -d ext
           APP=$(find ext/Payload -maxdepth 1 -name '*.app' | head -1)
           
-          # Pega o executável do app
+          # Lê o Info.plist via Python para achar o executável
           BIN=$(python3 -c "import plistlib; print(plistlib.load(open('$APP/Info.plist','rb'))['CFBundleExecutable'])")
+          
+          # Extrai os textos e nomes de classes de dentro do app
+          strings -a "$APP/$BIN" > strings.txt
           
           echo "APP=$APP" >> $GITHUB_ENV
           echo "BIN=$BIN" >> $GITHUB_ENV
-          
-          # Extrai as strings e os símbolos
-          strings -a "$APP/$BIN" > strings.txt
-          nm "$APP/$BIN" > classes.txt 2>/dev/null || true
 
       - name: Build Tweak
         run: |
@@ -47,5 +37,4 @@ jobs:
           path: |
             tweak/.theos/obj/arm64/*.dylib
             tweak/packages/*.deb
-            work/classes.txt
             work/strings.txt
