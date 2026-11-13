@@ -9,21 +9,13 @@ jobs:
       - name: Install dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y git make clang perl zip unzip libssl-dev libplist-dev libxml2-dev python3 wget
+          sudo apt-get install -y git make clang perl zip unzip libssl-dev libplist-dev libxml2-dev python3 wget curl
           
       - name: Setup Theos
         run: |
           export THEOS=$HOME/theos
-          git clone --recursive https://github.com/theos/theos.git $THEOS
-          
-          # O pulo do gato: apaga a pasta sdks que já vem no repo antes de clonar a correta
-          rm -rf $THEOS/sdks
-          git clone --depth 1 https://github.com/theos/sdks.git $THEOS/sdks
-          
-          # Link correto do toolchain pro Linux
-          wget -q https://github.com/theos/toolchain/releases/download/linux/ios-toolchain.xz -O ios-toolchain.xz
-          tar -xf ios-toolchain.xz -C $THEOS
-          rm ios-toolchain.xz
+          # Instalador oficial do Theos aceitando todas as configurações padrão
+          yes "" | bash -c "$(curl -fsSL https://raw.githubusercontent.com/theos/theos/master/bin/install-theos)"
           
           echo "THEOS=$THEOS" >> $GITHUB_ENV
           echo "$THEOS/bin" >> $GITHUB_PATH
@@ -34,14 +26,15 @@ jobs:
           unzip -q ../ipa/3105.ipa -d ext
           APP=$(find ext/Payload -maxdepth 1 -name '*.app' | head -1)
           
-          # Usando python pra ler o Info.plist (Linux não tem PlistBuddy)
+          # Pega o executável do app
           BIN=$(python3 -c "import plistlib; print(plistlib.load(open('$APP/Info.plist','rb'))['CFBundleExecutable'])")
           
           echo "APP=$APP" >> $GITHUB_ENV
           echo "BIN=$BIN" >> $GITHUB_ENV
           
+          # Extrai as strings e os símbolos
           strings -a "$APP/$BIN" > strings.txt
-          objdump -x "$APP/$BIN" > classes.txt 2>/dev/null || true
+          nm "$APP/$BIN" > classes.txt 2>/dev/null || true
 
       - name: Build Tweak
         run: |
