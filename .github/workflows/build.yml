@@ -9,19 +9,21 @@ jobs:
       - name: Install dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y git make clang perl zip unzip libssl-dev libplist-dev libxml2-dev
+          sudo apt-get install -y git make clang perl zip unzip libssl-dev libplist-dev libxml2-dev python3 wget
           
       - name: Setup Theos
         run: |
           export THEOS=$HOME/theos
           git clone --recursive https://github.com/theos/theos.git $THEOS
-          sudo mkdir -p /opt/theos
-          sudo chown -R $USER /opt/theos
           
-          # Baixando o SDK e o toolchain do iOS
+          # O pulo do gato: apaga a pasta sdks que já vem no repo antes de clonar a correta
+          rm -rf $THEOS/sdks
           git clone --depth 1 https://github.com/theos/sdks.git $THEOS/sdks
-          curl -LO https://github.com/theos/toolchain/releases/latest/download/ios-toolchain.tar.xz
-          tar -xf ios-toolchain.tar.xz -C $THEOS
+          
+          # Link correto do toolchain pro Linux
+          wget -q https://github.com/theos/toolchain/releases/download/linux/ios-toolchain.xz -O ios-toolchain.xz
+          tar -xf ios-toolchain.xz -C $THEOS
+          rm ios-toolchain.xz
           
           echo "THEOS=$THEOS" >> $GITHUB_ENV
           echo "$THEOS/bin" >> $GITHUB_PATH
@@ -31,13 +33,14 @@ jobs:
           mkdir -p work && cd work
           unzip -q ../ipa/3105.ipa -d ext
           APP=$(find ext/Payload -maxdepth 1 -name '*.app' | head -1)
-          BIN=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$APP/Info.plist" 2>/dev/null || python3 -c "import plistlib; print(plistlib.load(open('$APP/Info.plist','rb'))['CFBundleExecutable'])")
+          
+          # Usando python pra ler o Info.plist (Linux não tem PlistBuddy)
+          BIN=$(python3 -c "import plistlib; print(plistlib.load(open('$APP/Info.plist','rb'))['CFBundleExecutable'])")
+          
           echo "APP=$APP" >> $GITHUB_ENV
           echo "BIN=$BIN" >> $GITHUB_ENV
           
-          # Dump de classes e strings
           strings -a "$APP/$BIN" > strings.txt
-          # No Linux usamos objdump
           objdump -x "$APP/$BIN" > classes.txt 2>/dev/null || true
 
       - name: Build Tweak
