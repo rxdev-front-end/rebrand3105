@@ -5,8 +5,6 @@
 static UIViewController *originalVC;
 static NSString *const kPatchesKey = @"ImportedPatches3105";
 
-// --- BUSCADOR DINÂMICO DE CLASSE ---
-// Procura em todo o app qual classe tem a função de injeção
 Class findClassForSelector(SEL selector) {
     unsigned int count;
     Class *classes = objc_copyClassList(&count);
@@ -22,7 +20,6 @@ Class findClassForSelector(SEL selector) {
     return result;
 }
 
-// --- MODELO DE DADOS ---
 @interface PatchItem : NSObject
 @property (nonatomic, copy) NSString *name;
 @property (nonatomic, copy) NSString *path;
@@ -44,7 +41,6 @@ Class findClassForSelector(SEL selector) {
 }
 @end
 
-// --- CELULA DA LISTA ---
 @interface PatchCell : UITableViewCell
 @property (nonatomic, strong) UIVisualEffectView *glassView;
 @property (nonatomic, strong) UILabel *titleLabel;
@@ -107,11 +103,11 @@ Class findClassForSelector(SEL selector) {
 }
 @end
 
-// --- INTERFACE PRINCIPAL ---
 @interface MyCustomVC : UIViewController <UITableViewDelegate, UITableViewDataSource, UIDocumentPickerDelegate>
 @property (nonatomic, strong) UITableView *tableView;
 @property (nonatomic, strong) NSMutableArray<PatchItem *> *patches;
 @property (nonatomic, strong) UILabel *emptyLabel;
+@property (nonatomic, strong) UIDocumentPickerViewController *filePicker;
 @end
 
 @implementation MyCustomVC
@@ -279,29 +275,36 @@ Class findClassForSelector(SEL selector) {
     }
 }
 
+// CORREÇÃO DO BOTÃO DE IMPORTAR
 - (void)importPatchTapped {
-    UIDocumentPickerViewController *picker = [[UIDocumentPickerViewController alloc] initForOpeningContentTypes:@[UTTypeItem]];
-    picker.delegate = self;
-    [self presentViewController:picker animated:YES completion:nil];
+    dispatch_async(dispatch_get_main_queue(), ^{
+        // O asCopy:YES é a chave. Ele força o iOS a entregar o arquivo pra gente.
+        self.filePicker = [[UIDocumentPickerViewController alloc] initForOpeningContentTypes:@[UTTypeItem] asCopy:YES];
+        self.filePicker.delegate = self;
+        [self presentViewController:self.filePicker animated:YES completion:nil];
+    });
 }
 
 - (void)documentPicker:(UIDocumentPickerViewController *)controller didPickDocumentsAtURLs:(NSArray<NSURL *> *)urls {
     NSURL *url = urls.firstObject;
     if (!url) return;
     
-    UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"Senha do Patch" message:@"Digite a senha (ou deixe em branco)" preferredStyle:UIAlertControllerStyleAlert];
-    [alert addTextFieldWithConfigurationHandler:^(UITextField * _Nonnull textField) {
-        textField.placeholder = @"Senha...";
-        textField.secureTextEntry = YES;
-    }];
-    
-    [alert addAction:[UIAlertAction actionWithTitle:@"Cancelar" style:UIAlertActionStyleCancel handler:nil]];
-    [alert addAction:[UIAlertAction actionWithTitle:@"Importar" style:UIAlertActionStyleDefault handler:^(UIAlertAction * _Nonnull action) {
-        NSString *password = alert.textFields.firstObject.text;
-        [self processImport:url password:password];
-    }]];
-    
-    [self presentViewController:alert animated:YES completion:nil];
+    // Garante que a tela anterior já sumiu antes de abrir a caixinha de senha
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.5 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+        UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"Senha do Patch" message:@"Digite a senha (ou deixe em branco)" preferredStyle:UIAlertControllerStyleAlert];
+        [alert addTextFieldWithConfigurationHandler:^(UITextField * _Nonnull textField) {
+            textField.placeholder = @"Senha...";
+            textField.secureTextEntry = YES;
+        }];
+        
+        [alert addAction:[UIAlertAction actionWithTitle:@"Cancelar" style:UIAlertActionStyleCancel handler:nil]];
+        [alert addAction:[UIAlertAction actionWithTitle:@"Importar" style:UIAlertActionStyleDefault handler:^(UIAlertAction * _Nonnull action) {
+            NSString *password = alert.textFields.firstObject.text;
+            [self processImport:url password:password];
+        }]];
+        
+        [self presentViewController:alert animated:YES completion:nil];
+    });
 }
 
 - (void)processImport:(NSURL *)url password:(NSString *)password {
@@ -316,11 +319,9 @@ Class findClassForSelector(SEL selector) {
     [self updateEmptyState];
 }
 
-// --- AQUI ENTRA O MOTOR DO 3105 ---
 - (void)applyPatch:(PatchItem *)item {
     NSLog(@"[MinhaApp] Aplicando patch: %@ no caminho: %@", item.name, item.path);
     
-    // Procura a função de injeção em tempo de execução
     SEL injectSel = NSSelectorFromString(@"injectDirectoryWithDeviceIP:pairingPath:sourceDirectory:targetDirectory:directoryName:error:");
     Class targetClass = findClassForSelector(injectSel);
     
