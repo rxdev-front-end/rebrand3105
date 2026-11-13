@@ -1,14 +1,54 @@
 #import <UIKit/UIKit.h>
+#import <UniformTypeIdentifiers/UniformTypeIdentifiers.h>
+#import <objc/runtime.h>
 
-// Variável global para guardar a tela original do 3105
 static UIViewController *originalVC;
+static NSString *const kPatchesKey = @"ImportedPatches3105";
 
-// --- CUSTOM CELL (O Card do Patch) ---
+// --- BUSCADOR DINÂMICO DE CLASSE ---
+// Procura em todo o app qual classe tem a função de injeção
+Class findClassForSelector(SEL selector) {
+    unsigned int count;
+    Class *classes = objc_copyClassList(&count);
+    Class result = nil;
+    for (unsigned int i = 0; i < count; i++) {
+        Class cls = classes[i];
+        if (class_getInstanceMethod(cls, selector)) {
+            result = cls;
+            break;
+        }
+    }
+    free(classes);
+    return result;
+}
+
+// --- MODELO DE DADOS ---
+@interface PatchItem : NSObject
+@property (nonatomic, copy) NSString *name;
+@property (nonatomic, copy) NSString *path;
+@property (nonatomic, assign) BOOL isActive;
+@end
+
+@implementation PatchItem
+- (instancetype)initWithDictionary:(NSDictionary *)dict {
+    self = [super init];
+    if (self) {
+        _name = dict[@"name"];
+        _path = dict[@"path"];
+        _isActive = [dict[@"isActive"] boolValue];
+    }
+    return self;
+}
+- (NSDictionary *)toDictionary {
+    return @{@"name": _name ?: @"", @"path": _path ?: @"", @"isActive": @(_isActive)};
+}
+@end
+
+// --- CELULA DA LISTA ---
 @interface PatchCell : UITableViewCell
-@property (nonatomic, strong) UIView *cardView;
+@property (nonatomic, strong) UIVisualEffectView *glassView;
 @property (nonatomic, strong) UILabel *titleLabel;
-@property (nonatomic, strong) UILabel *subtitleLabel;
-@property (nonatomic, strong) UILabel *tagLabel;
+@property (nonatomic, strong) UILabel *statusLabel;
 @property (nonatomic, strong) UISwitch *toggle;
 @end
 
@@ -19,152 +59,193 @@ static UIViewController *originalVC;
         self.backgroundColor = [UIColor clearColor];
         self.selectionStyle = UITableViewCellSelectionStyleNone;
         
-        // Fundo do card (Vermelho escuro quase preto)
-        _cardView = [[UIView alloc] initWithFrame:CGRectZero];
-        _cardView.backgroundColor = [UIColor colorWithRed:0.12 green:0.05 blue:0.05 alpha:1.0];
-        _cardView.layer.cornerRadius = 12;
-        _cardView.layer.borderWidth = 1.0;
-        _cardView.layer.borderColor = [UIColor colorWithRed:0.3 green:0.1 blue:0.1 alpha:1.0].CGColor;
-        [self.contentView addSubview:_cardView];
+        _glassView = [[UIVisualEffectView alloc] initWithEffect:[UIBlurEffect effectWithStyle:UIBlurEffectStyleSystemUltraThinMaterialDark]];
+        _glassView.layer.cornerRadius = 16;
+        _glassView.layer.masksToBounds = YES;
+        _glassView.layer.borderWidth = 1.0;
+        _glassView.layer.borderColor = [UIColor colorWithWhite:1.0 alpha:0.1].CGColor;
+        [self.contentView addSubview:_glassView];
         
-        // Ícone do lado esquerdo
-        UIView *iconBg = [[UIView alloc] initWithFrame:CGRectZero];
-        iconBg.backgroundColor = [UIColor colorWithRed:0.2 green:0.05 blue:0.05 alpha:1.0];
-        iconBg.layer.cornerRadius = 8;
-        [_cardView addSubview:iconBg];
-        
-        UIImageView *icon = [[UIImageView alloc] initWithImage:[UIImage systemImageNamed:@"scope"]];
-        icon.tintColor = [UIColor colorWithRed:0.9 green:0.2 blue:0.2 alpha:1.0];
-        icon.contentMode = UIViewContentModeScaleAspectFit;
-        [iconBg addSubview:icon];
-        
-        // Título do patch
-        _titleLabel = [[UILabel alloc] initWithFrame:CGRectZero];
+        _titleLabel = [[UILabel alloc] init];
         _titleLabel.textColor = [UIColor whiteColor];
-        _titleLabel.font = [UIFont boldSystemFontOfSize:16];
-        [_cardView addSubview:_titleLabel];
+        _titleLabel.font = [UIFont boldSystemFontOfSize:17];
+        [_glassView.contentView addSubview:_titleLabel];
         
-        // Tag "NORMAL"
-        _tagLabel = [[UILabel alloc] initWithFrame:CGRectZero];
-        _tagLabel.text = @" NORMAL ";
-        _tagLabel.textColor = [UIColor colorWithRed:0.8 green:0.3 blue:0.3 alpha:1.0];
-        _tagLabel.backgroundColor = [UIColor colorWithRed:0.2 green:0.05 blue:0.05 alpha:1.0];
-        _tagLabel.font = [UIFont boldSystemFontOfSize:10];
-        _tagLabel.layer.cornerRadius = 4;
-        _tagLabel.layer.masksToBounds = YES;
-        [_cardView addSubview:_tagLabel];
+        _statusLabel = [[UILabel alloc] init];
+        _statusLabel.textColor = [UIColor lightGrayColor];
+        _statusLabel.font = [UIFont systemFontOfSize:13];
+        [_glassView.contentView addSubview:_statusLabel];
         
-        // Subtítulo
-        _subtitleLabel = [[UILabel alloc] initWithFrame:CGRectZero];
-        _subtitleLabel.textColor = [UIColor grayColor];
-        _subtitleLabel.font = [UIFont systemFontOfSize:12];
-        [_cardView addSubview:_subtitleLabel];
+        _toggle = [[UISwitch alloc] init];
+        _toggle.onTintColor = [UIColor systemRedColor];
+        [_glassView.contentView addSubview:_toggle];
         
-        // Botão de ligar/desligar (Toggle)
-        _toggle = [[UISwitch alloc] initWithFrame:CGRectZero];
-        _toggle.onTintColor = [UIColor colorWithRed:0.9 green:0.2 blue:0.2 alpha:1.0];
-        [_cardView addSubview:_toggle];
+        _glassView.translatesAutoresizingMaskIntoConstraints = NO;
+        _titleLabel.translatesAutoresizingMaskIntoConstraints = NO;
+        _statusLabel.translatesAutoresizingMaskIntoConstraints = NO;
+        _toggle.translatesAutoresizingMaskIntoConstraints = NO;
+        
+        [NSLayoutConstraint activateConstraints:@[
+            [_glassView.leadingAnchor constraintEqualToAnchor:self.contentView.leadingAnchor constant:16],
+            [_glassView.trailingAnchor constraintEqualToAnchor:self.contentView.trailingAnchor constant:-16],
+            [_glassView.topAnchor constraintEqualToAnchor:self.contentView.topAnchor constant:6],
+            [_glassView.bottomAnchor constraintEqualToAnchor:self.contentView.bottomAnchor constant:-6],
+            
+            [_titleLabel.leadingAnchor constraintEqualToAnchor:_glassView.contentView.leadingAnchor constant:20],
+            [_titleLabel.topAnchor constraintEqualToAnchor:_glassView.contentView.topAnchor constant:16],
+            [_titleLabel.trailingAnchor constraintLessThanOrEqualToAnchor:_toggle.leadingAnchor constant:-10],
+            
+            [_statusLabel.leadingAnchor constraintEqualToAnchor:_titleLabel.leadingAnchor],
+            [_statusLabel.topAnchor constraintEqualToAnchor:_titleLabel.bottomAnchor constant:4],
+            [_statusLabel.bottomAnchor constraintEqualToAnchor:_glassView.contentView.bottomAnchor constant:-16],
+            
+            [_toggle.centerYAnchor constraintEqualToAnchor:_glassView.contentView.centerYAnchor],
+            [_toggle.trailingAnchor constraintEqualToAnchor:_glassView.contentView.trailingAnchor constant:-20]
+        ]];
     }
     return self;
 }
-
-- (void)layoutSubviews {
-    [super layoutSubviews];
-    _cardView.frame = CGRectMake(15, 5, self.contentView.bounds.size.width - 30, 75);
-    
-    UIView *iconBg = _cardView.subviews[0];
-    iconBg.frame = CGRectMake(12, 15, 45, 45);
-    iconBg.subviews[0].frame = CGRectMake(10, 10, 25, 25);
-    
-    _titleLabel.frame = CGRectMake(70, 15, 200, 20);
-    _tagLabel.frame = CGRectMake(70 + [_titleLabel.text sizeWithAttributes:@{NSFontAttributeName:_titleLabel.font}].width + 5, 16, 60, 16);
-    _subtitleLabel.frame = CGRectMake(70, 40, 200, 20);
-    
-    _toggle.frame = CGRectMake(_cardView.bounds.size.width - 60, 22, 51, 31);
-}
 @end
 
-// --- NOSSA INTERFACE PRINCIPAL ---
-@interface MyCustomVC : UIViewController <UITableViewDelegate, UITableViewDataSource>
-@property (nonatomic, strong) NSArray *patches;
+// --- INTERFACE PRINCIPAL ---
+@interface MyCustomVC : UIViewController <UITableViewDelegate, UITableViewDataSource, UIDocumentPickerDelegate>
+@property (nonatomic, strong) UITableView *tableView;
+@property (nonatomic, strong) NSMutableArray<PatchItem *> *patches;
+@property (nonatomic, strong) UILabel *emptyLabel;
 @end
 
 @implementation MyCustomVC
 
 - (void)viewDidLoad {
     [super viewDidLoad];
-    self.view.backgroundColor = [UIColor colorWithRed:0.06 green:0.02 blue:0.02 alpha:1.0];
+    self.view.backgroundColor = [UIColor colorWithRed:0.05 green:0.02 blue:0.02 alpha:1.0];
     
-    // Dados fake só pra preencher a tela igual a sua print
-    _patches = @[
-        @{@"title": @"HS GIRAFA", @"status": @"Estado não verificado"},
-        @{@"title": @"HS CEARENSE", @"status": @"Estado não verificado"},
-        @{@"title": @"HS PESCOÇO + ANTENA", @"status": @"Estado não verificado"},
-        @{@"title": @"HS PEITO + ANTENA", @"status": @"Estado não verificado"},
-        @{@"title": @"HS PIKA", @"status": @"Estado não verificado"},
-        @{@"title": @"HS CORPO 85", @"status": @"Estado não verificado"},
-        @{@"title": @"144 FPS FFTH", @"status": @"Estado não verificado"}
-    ];
-    
-    // Topo (Header)
-    UIView *header = [[UIView alloc] initWithFrame:CGRectMake(0, 50, self.view.bounds.size.width, 80)];
-    
-    UIView *avatar = [[UIView alloc] initWithFrame:CGRectMake(20, 15, 50, 50)];
-    avatar.backgroundColor = [UIColor colorWithRed:0.9 green:0.2 blue:0.2 alpha:1.0];
-    avatar.layer.cornerRadius = 25;
-    UIImageView *personIcon = [[UIImageView alloc] initWithImage:[UIImage systemImageNamed:@"person.fill"]];
-    personIcon.tintColor = [UIColor whiteColor];
-    personIcon.frame = CGRectMake(15, 15, 20, 20);
-    [avatar addSubview:personIcon];
-    [header addSubview:avatar];
-    
-    UILabel *title = [[UILabel alloc] initWithFrame:CGRectMake(85, 15, 200, 30)];
-    title.text = @"Patches";
-    title.textColor = [UIColor whiteColor];
-    title.font = [UIFont boldSystemFontOfSize:28];
-    [header addSubview:title];
-    
-    UILabel *subtitle = [[UILabel alloc] initWithFrame:CGRectMake(85, 45, 200, 20)];
-    subtitle.text = @"V O L T   C H A T S";
-    subtitle.textColor = [UIColor colorWithRed:0.9 green:0.2 blue:0.2 alpha:1.0];
-    subtitle.font = [UIFont boldSystemFontOfSize:12];
-    [header addSubview:subtitle];
-    
+    [self loadData];
+    [self setupUI];
+}
+
+- (void)loadData {
+    _patches = [NSMutableArray array];
+    NSArray *saved = [[NSUserDefaults standardUserDefaults] arrayForKey:kPatchesKey];
+    for (NSDictionary *dict in saved) {
+        [_patches addObject:[[PatchItem alloc] initWithDictionary:dict]];
+    }
+}
+
+- (void)saveData {
+    NSMutableArray *arr = [NSMutableArray array];
+    for (PatchItem *item in _patches) {
+        [arr addObject:[item toDictionary]];
+    }
+    [[NSUserDefaults standardUserDefaults] setObject:arr forKey:kPatchesKey];
+}
+
+- (void)setupUI {
+    UIView *header = [[UIView alloc] init];
+    header.translatesAutoresizingMaskIntoConstraints = NO;
     [self.view addSubview:header];
     
-    // Tabela de Patches
-    UITableView *table = [[UITableView alloc] initWithFrame:CGRectMake(0, 130, self.view.bounds.size.width, self.view.bounds.size.height - 220) style:UITableViewStylePlain];
-    table.backgroundColor = [UIColor clearColor];
-    table.separatorStyle = UITableViewCellSeparatorStyleNone;
-    table.delegate = self;
-    table.dataSource = self;
-    [self.view addSubview:table];
+    UILabel *title = [[UILabel alloc] init];
+    title.text = @"Patches";
+    title.textColor = [UIColor whiteColor];
+    title.font = [UIFont boldSystemFontOfSize:32];
+    title.translatesAutoresizingMaskIntoConstraints = NO;
+    [header addSubview:title];
     
-    // Barra inferior (Fake tab bar)
-    UIView *bottomBar = [[UIView alloc] initWithFrame:CGRectMake(0, self.view.bounds.size.height - 90, self.view.bounds.size.width, 90)];
-    bottomBar.backgroundColor = [UIColor colorWithRed:0.08 green:0.02 blue:0.02 alpha:1.0];
+    UIButton *importBtn = [UIButton buttonWithType:UIButtonTypeSystem];
+    [importBtn setImage:[UIImage systemImageNamed:@"plus.circle.fill"] forState:UIControlStateNormal];
+    importBtn.tintColor = [UIColor systemRedColor];
+    importBtn.transform = CGAffineTransformMakeScale(1.5, 1.5);
+    [importBtn addTarget:self action:@selector(importPatchTapped) forControlEvents:UIControlEventTouchUpInside];
+    importBtn.translatesAutoresizingMaskIntoConstraints = NO;
+    [header addSubview:importBtn];
     
-    // Botão Patches ativo
-    UIView *patchesBtn = [[UIView alloc] initWithFrame:CGRectMake(20, 15, 60, 50)];
-    patchesBtn.backgroundColor = [UIColor colorWithRed:0.2 green:0.05 blue:0.05 alpha:1.0];
-    patchesBtn.layer.cornerRadius = 10;
-    UIImageView *pIcon = [[UIImageView alloc] initWithImage:[UIImage systemImageNamed:@"scope"]];
-    pIcon.tintColor = [UIColor colorWithRed:0.9 green:0.2 blue:0.2 alpha:1.0];
-    pIcon.frame = CGRectMake(20, 8, 20, 20);
-    [patchesBtn addSubview:pIcon];
-    UILabel *pLabel = [[UILabel alloc] initWithFrame:CGRectMake(0, 30, 60, 15)];
-    pLabel.text = @"Patches";
-    pLabel.textColor = [UIColor colorWithRed:0.9 green:0.2 blue:0.2 alpha:1.0];
-    pLabel.font = [UIFont systemFontOfSize:10];
-    pLabel.textAlignment = NSTextAlignmentCenter;
-    [patchesBtn addSubview:pLabel];
-    [bottomBar addSubview:patchesBtn];
+    _tableView = [[UITableView alloc] initWithFrame:CGRectZero style:UITableViewStylePlain];
+    _tableView.backgroundColor = [UIColor clearColor];
+    _tableView.separatorStyle = UITableViewCellSeparatorStyleNone;
+    _tableView.delegate = self;
+    _tableView.dataSource = self;
+    _tableView.translatesAutoresizingMaskIntoConstraints = NO;
+    [self.view addSubview:_tableView];
     
-    [self.view addSubview:bottomBar];
+    _emptyLabel = [[UILabel alloc] init];
+    _emptyLabel.text = @"Nenhum patch importado.\nToque no + para adicionar.";
+    _emptyLabel.textColor = [UIColor grayColor];
+    _emptyLabel.font = [UIFont systemFontOfSize:16];
+    _emptyLabel.textAlignment = NSTextAlignmentCenter;
+    _emptyLabel.numberOfLines = 0;
+    _emptyLabel.translatesAutoresizingMaskIntoConstraints = NO;
+    [self.view addSubview:_emptyLabel];
+    [self updateEmptyState];
+    
+    UIVisualEffectView *tabBarGlass = [[UIVisualEffectView alloc] initWithEffect:[UIBlurEffect effectWithStyle:UIBlurEffectStyleSystemThinMaterialDark]];
+    tabBarGlass.layer.cornerRadius = 25;
+    tabBarGlass.layer.masksToBounds = YES;
+    tabBarGlass.layer.borderWidth = 1.0;
+    tabBarGlass.layer.borderColor = [UIColor colorWithWhite:1.0 alpha:0.15].CGColor;
+    tabBarGlass.translatesAutoresizingMaskIntoConstraints = NO;
+    [self.view addSubview:tabBarGlass];
+    
+    UIStackView *tabContent = [[UIStackView alloc] init];
+    tabContent.axis = UILayoutConstraintAxisVertical;
+    tabContent.alignment = UIStackViewAlignmentCenter;
+    tabContent.spacing = 4;
+    tabContent.translatesAutoresizingMaskIntoConstraints = NO;
+    [tabBarGlass.contentView addSubview:tabContent];
+    
+    UIImageView *icon = [[UIImageView alloc] initWithImage:[UIImage systemImageNamed:@"scope"]];
+    icon.tintColor = [UIColor systemRedColor];
+    [icon.heightAnchor constraintEqualToConstant:24].active = YES;
+    [icon.widthAnchor constraintEqualToConstant:24].active = YES;
+    
+    UILabel *lbl = [[UILabel alloc] init];
+    lbl.text = @"Patches";
+    lbl.textColor = [UIColor systemRedColor];
+    lbl.font = [UIFont boldSystemFontOfSize:11];
+    
+    [tabContent addArrangedSubview:icon];
+    [tabContent addArrangedSubview:lbl];
+    
+    [NSLayoutConstraint activateConstraints:@[
+        [header.topAnchor constraintEqualToAnchor:self.view.safeAreaLayoutGuide.topAnchor constant:10],
+        [header.leadingAnchor constraintEqualToAnchor:self.view.leadingAnchor constant:20],
+        [header.trailingAnchor constraintEqualToAnchor:self.view.trailingAnchor constant:-20],
+        [header.heightAnchor constraintEqualToConstant:50],
+        
+        [title.leadingAnchor constraintEqualToAnchor:header.leadingAnchor],
+        [title.centerYAnchor constraintEqualToAnchor:header.centerYAnchor],
+        
+        [importBtn.trailingAnchor constraintEqualToAnchor:header.trailingAnchor],
+        [importBtn.centerYAnchor constraintEqualToAnchor:header.centerYAnchor],
+        
+        [_tableView.topAnchor constraintEqualToAnchor:header.bottomAnchor constant:10],
+        [_tableView.leadingAnchor constraintEqualToAnchor:self.view.leadingAnchor],
+        [_tableView.trailingAnchor constraintEqualToAnchor:self.view.trailingAnchor],
+        [_tableView.bottomAnchor constraintEqualToAnchor:self.view.bottomAnchor],
+        
+        [_emptyLabel.centerXAnchor constraintEqualToAnchor:self.view.centerXAnchor],
+        [_emptyLabel.centerYAnchor constraintEqualToAnchor:self.view.centerYAnchor],
+        
+        [tabBarGlass.centerXAnchor constraintEqualToAnchor:self.view.centerXAnchor],
+        [tabBarGlass.bottomAnchor constraintEqualToAnchor:self.view.safeAreaLayoutGuide.bottomAnchor constant:-10],
+        [tabBarGlass.widthAnchor constraintEqualToConstant:100],
+        [tabBarGlass.heightAnchor constraintEqualToConstant:60],
+        
+        [tabContent.centerXAnchor constraintEqualToAnchor:tabBarGlass.contentView.centerXAnchor],
+        [tabContent.centerYAnchor constraintEqualToAnchor:tabBarGlass.contentView.centerYAnchor]
+    ]];
+}
+
+- (void)updateEmptyState {
+    _emptyLabel.hidden = (_patches.count > 0);
 }
 
 - (NSInteger)tableView:(UITableView *)tableView numberOfRowsInSection:(NSInteger)section {
     return _patches.count;
+}
+
+- (CGFloat)tableView:(UITableView *)tableView heightForRowAtIndexPath:(NSIndexPath *)indexPath {
+    return 90;
 }
 
 - (UITableViewCell *)tableView:(UITableView *)tableView cellForRowAtIndexPath:(NSIndexPath *)indexPath {
@@ -174,47 +255,105 @@ static UIViewController *originalVC;
         cell = [[PatchCell alloc] initWithStyle:UITableViewCellStyleDefault reuseIdentifier:cellId];
     }
     
-    NSDictionary *data = _patches[indexPath.row];
-    cell.titleLabel.text = data[@"title"];
-    cell.subtitleLabel.text = [NSString stringWithFormat:@"? %@", data[@"status"]];
-    
-    [cell.toggle addTarget:self action:@selector(toggleChanged:) forControlEvents:UIControlEventValueChanged];
+    PatchItem *item = _patches[indexPath.row];
+    cell.titleLabel.text = item.name;
+    cell.statusLabel.text = item.isActive ? @"Ativado" : @"Desativado";
+    cell.toggle.on = item.isActive;
     cell.toggle.tag = indexPath.row;
+    [cell.toggle addTarget:self action:@selector(toggleChanged:) forControlEvents:UIControlEventValueChanged];
     
     return cell;
 }
 
-- (CGFloat)tableView:(UITableView *)tableView heightForRowAtIndexPath:(NSIndexPath *)indexPath {
-    return 85;
+- (void)toggleChanged:(UISwitch *)sender {
+    PatchItem *item = _patches[sender.tag];
+    item.isActive = sender.isOn;
+    [self saveData];
+    
+    [self.tableView reloadData];
+    
+    if (item.isActive) {
+        [self applyPatch:item];
+    } else {
+        [self restorePatch:item];
+    }
 }
 
-- (void)toggleChanged:(UISwitch *)sender {
-    NSString *patchName = _patches[sender.tag][@"title"];
+- (void)importPatchTapped {
+    UIDocumentPickerViewController *picker = [[UIDocumentPickerViewController alloc] initForOpeningContentTypes:@[UTTypeItem]];
+    picker.delegate = self;
+    [self presentViewController:picker animated:YES completion:nil];
+}
+
+- (void)documentPicker:(UIDocumentPickerViewController *)controller didPickDocumentsAtURLs:(NSArray<NSURL *> *)urls {
+    NSURL *url = urls.firstObject;
+    if (!url) return;
     
-    if (sender.isOn) {
-        NSLog(@"Ativando patch: %@", patchName);
-        // AQUI VAI A CHAMADA DO MOTOR DE INJEÇÃO DO 3105
-        // [originalVC performSelector:NSSelectorFromString(@"injectPatchDirectoryWithDeviceIP:...")];
-        
-        // Simulação visual de carregamento
-        UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"Injetando" message:[NSString stringWithFormat:@"Ativando %@...", patchName] preferredStyle:UIAlertControllerStyleAlert];
+    UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"Senha do Patch" message:@"Digite a senha (ou deixe em branco)" preferredStyle:UIAlertControllerStyleAlert];
+    [alert addTextFieldWithConfigurationHandler:^(UITextField * _Nonnull textField) {
+        textField.placeholder = @"Senha...";
+        textField.secureTextEntry = YES;
+    }];
+    
+    [alert addAction:[UIAlertAction actionWithTitle:@"Cancelar" style:UIAlertActionStyleCancel handler:nil]];
+    [alert addAction:[UIAlertAction actionWithTitle:@"Importar" style:UIAlertActionStyleDefault handler:^(UIAlertAction * _Nonnull action) {
+        NSString *password = alert.textFields.firstObject.text;
+        [self processImport:url password:password];
+    }]];
+    
+    [self presentViewController:alert animated:YES completion:nil];
+}
+
+- (void)processImport:(NSURL *)url password:(NSString *)password {
+    PatchItem *newItem = [[PatchItem alloc] init];
+    newItem.name = url.lastPathComponent.stringByDeletingPathExtension;
+    newItem.path = url.path;
+    newItem.isActive = NO;
+    
+    [_patches addObject:newItem];
+    [self saveData];
+    [self.tableView reloadData];
+    [self updateEmptyState];
+}
+
+// --- AQUI ENTRA O MOTOR DO 3105 ---
+- (void)applyPatch:(PatchItem *)item {
+    NSLog(@"[MinhaApp] Aplicando patch: %@ no caminho: %@", item.name, item.path);
+    
+    // Procura a função de injeção em tempo de execução
+    SEL injectSel = NSSelectorFromString(@"injectDirectoryWithDeviceIP:pairingPath:sourceDirectory:targetDirectory:directoryName:error:");
+    Class targetClass = findClassForSelector(injectSel);
+    
+    if (targetClass) {
+        NSLog(@"[MinhaApp] SUCESSO! Encontrei a classe do motor: %@", NSStringFromClass(targetClass));
+        UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"Motor Encontrado" message:[NSString stringWithFormat:@"Classe: %@\nInjetando %@...", NSStringFromClass(targetClass), item.name] preferredStyle:UIAlertControllerStyleAlert];
         [self presentViewController:alert animated:YES completion:nil];
-        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.0 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(2.0 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
             [alert dismissViewControllerAnimated:YES completion:nil];
         });
     } else {
-        NSLog(@"Desativando patch: %@", patchName);
+        NSLog(@"[MinhaApp] Falha ao encontrar o motor.");
+        UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"Erro" message:@"Não achei o motor de injeção do app." preferredStyle:UIAlertControllerStyleAlert];
+        [alert addAction:[UIAlertAction actionWithTitle:@"OK" style:UIAlertActionStyleDefault handler:nil]];
+        [self presentViewController:alert animated:YES completion:nil];
     }
+}
+
+- (void)restorePatch:(PatchItem *)item {
+    NSLog(@"[MinhaApp] Restaurando patch: %@", item.name);
+    UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"Restaurando" message:[NSString stringWithFormat:@"Removendo %@...", item.name] preferredStyle:UIAlertControllerStyleAlert];
+    [self presentViewController:alert animated:YES completion:nil];
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.0 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+        [alert dismissViewControllerAnimated:YES completion:nil];
+    });
 }
 
 @end
 
-// --- INJETANDO A NOSSA TELA NO LUGAR DA ORIGINAL ---
 %hook UIWindow
 - (void)makeKeyAndVisible {
-    originalVC = self.rootViewController; // Guarda a original
+    originalVC = self.rootViewController;
     %orig;
-    
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.0 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
         UIWindow *mainWindow = self;
         mainWindow.rootViewController = [[MyCustomVC alloc] init];
