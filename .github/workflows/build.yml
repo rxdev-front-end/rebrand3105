@@ -13,14 +13,23 @@ jobs:
 
       - name: Prepare IPA and Dump
         run: |
-          mkdir -p work && cd work
-          unzip -q ../ipa/3105.ipa -d ext
+          mkdir -p work
+          cd work
+          
+          # Acha o arquivo .ipa não importa onde ele esteja
+          IPA_FILE=$(find .. -maxdepth 2 -name "*.ipa" | head -n 1)
+          if [ -z "$IPA_FILE" ]; then
+            echo "Erro: Nenhuma IPA encontrada no repositório!"
+            exit 1
+          fi
+          
+          unzip -q "$IPA_FILE" -d ext
           APP=$(find ext/Payload -maxdepth 1 -name '*.app' | head -1)
           
-          # Lê o Info.plist via Python para achar o executável
+          # Extrai o nome do executável
           BIN=$(python3 -c "import plistlib; print(plistlib.load(open('$APP/Info.plist','rb'))['CFBundleExecutable'])")
           
-          # Extrai os textos e nomes de classes de dentro do app
+          # Extrai strings para podermos mapear as telas
           strings -a "$APP/$BIN" > strings.txt
           
           echo "APP=$APP" >> $GITHUB_ENV
